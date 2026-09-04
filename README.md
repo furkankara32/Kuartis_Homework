@@ -1,4 +1,4 @@
-# Kuartis Embedded Software Homework
+## Kuartis Embedded Software Homework
 
 This repository contains the implementation of the Embedded Software Homework for the Kuartis .
 
