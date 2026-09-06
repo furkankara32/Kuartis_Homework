@@ -19,9 +19,6 @@ typedef struct
     float measurement_noise;       /* R, measurement variance */
     float initial_covariance;      /* P0 */
 
-    float last_gain;               /* K, debug/diagnostic */
-    float last_innovation;         /* z - x_predicted */
-
     uint8_t initialized;
 
 } Kalman1D_t;

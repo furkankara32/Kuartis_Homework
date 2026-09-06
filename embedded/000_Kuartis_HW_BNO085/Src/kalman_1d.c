@@ -30,14 +30,8 @@ uint8_t Kalman1D_Init(Kalman1D_t *filter,float process_noise_rate,float measurem
         return 0U;
     }
 
-    /*
-     * Covariances cannot be negative.
-     * R must be strictly greater than zero because it is used
-     * in the Kalman gain denominator.
-     */
-    if ((process_noise_rate < 0.0f) ||
-        (measurement_noise <= 0.0f) ||
-        (initial_covariance < 0.0f))
+
+    if ((process_noise_rate < 0.0f) || (measurement_noise <= 0.0f) || (initial_covariance < 0.0f))
     {
         return 0U;
     }
@@ -48,9 +42,6 @@ uint8_t Kalman1D_Init(Kalman1D_t *filter,float process_noise_rate,float measurem
     filter->process_noise_rate = process_noise_rate;
     filter->measurement_noise = measurement_noise;
     filter->initial_covariance = initial_covariance;
-
-    filter->last_gain = 0.0f;
-    filter->last_innovation = 0.0f;
 
     filter->initialized = 0U;
 
@@ -72,10 +63,6 @@ void Kalman1D_Reset(Kalman1D_t *filter)
 
     filter->state_estimate = 0.0f;
     filter->error_covariance = filter->initial_covariance;
-
-    filter->last_gain = 0.0f;
-    filter->last_innovation = 0.0f;
-
     filter->initialized = 0U;
 }
 
@@ -113,17 +100,12 @@ uint8_t Kalman1D_Update(Kalman1D_t *filter,float measurement,float dt_s,float *f
     }
 
     /*
-     * The absolute magnetic field value is not known before
-     * the first measurement. Therefore initialize the state
-     * directly from the first valid sensor sample.
+     * Initialize state from the first valid measurement to avoid an artificial transient from zero.
      */
     if (filter->initialized == 0U)
     {
         filter->state_estimate = measurement;
         filter->error_covariance = filter->initial_covariance;
-
-        filter->last_gain = 0.0f;
-        filter->last_innovation = 0.0f;
 
         filter->initialized = 1U;
 
@@ -135,43 +117,24 @@ uint8_t Kalman1D_Update(Kalman1D_t *filter,float measurement,float dt_s,float *f
     /*
      * Prediction
      *
-     * Model:
-     * x(k) = x(k-1) + process noise
-     *
-     * Since A = 1:
-     * x_predicted = x
+     * A = 1
+     * x- = x
+     * P- = P + Q * dt
      */
     predicted_state = filter->state_estimate;
 
-    /*
-     * Process uncertainty grows with elapsed time.
-     *
-     * P_predicted = P + Q * dt
-     */
-    predicted_covariance =
-        filter->error_covariance +
-        (filter->process_noise_rate * dt_s);
+    predicted_covariance = filter->error_covariance + (filter->process_noise_rate * dt_s);
 
     /*
-     * Innovation:
+     * Measurement innovation
      *
-     * measurement - predicted measurement
-     *
-     * Since H = 1:
-     * innovation = z - x_predicted
+     * H = 1
+     * innovation = z - x-
      */
-    innovation =
-        measurement -
-        predicted_state;
+    innovation =  measurement -  predicted_state;
 
-    /*
-     * Innovation covariance:
-     *
-     * S = P_predicted + R
-     */
-    innovation_covariance =
-        predicted_covariance +
-        filter->measurement_noise;
+    innovation_covariance =  predicted_covariance +  filter->measurement_noise;
+
 
     if (innovation_covariance <= 0.0f)
     {
@@ -179,45 +142,31 @@ uint8_t Kalman1D_Update(Kalman1D_t *filter,float measurement,float dt_s,float *f
     }
 
     /*
-     * Kalman Gain:
+     * Kalman gain
      *
-     * K = P_predicted / S
+     * K = P- / (P- + R)
      */
-    kalman_gain =
-        predicted_covariance /
-        innovation_covariance;
+    kalman_gain =  predicted_covariance / innovation_covariance;
+
+
 
     /*
-     * Measurement correction:
-     *
-     * x = x_predicted + K * innovation
-     */
-    filter->state_estimate =
-        predicted_state +
-        (kalman_gain * innovation);
+      * State correction
+      *
+      * x = x- + K(z - x-)
+      */
+    filter->state_estimate = predicted_state + (kalman_gain * innovation);
+
+
 
     /*
-     * Joseph-form covariance update.
+     * Joseph-form covariance update
      *
-     * Scalar form:
-     *
-     * P = (1-K)^2 * P_predicted + K^2 * R
-     *
-     * Slightly more numerically robust than:
-     * P = (1-K) * P_predicted
+     * P = (1-K)^2 * P- + K^2 * R
      */
     correction_factor = 1.0f - kalman_gain;
 
-    filter->error_covariance =
-        (correction_factor *
-         correction_factor *
-         predicted_covariance) +
-        (kalman_gain *
-         kalman_gain *
-         filter->measurement_noise);
-
-    filter->last_gain = kalman_gain;
-    filter->last_innovation = innovation;
+    filter->error_covariance =  (correction_factor *  correction_factor *  predicted_covariance) + (kalman_gain *  kalman_gain * kalman_gain * filter->measurement_noise);
 
     *filtered_value = filter->state_estimate;
 

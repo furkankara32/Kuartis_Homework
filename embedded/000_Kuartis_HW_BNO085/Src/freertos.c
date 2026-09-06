@@ -36,59 +36,26 @@
 /*DEBUG Variables*/
 typedef struct
 {
+    /* Calibrated, unfiltered magnetometer data */
     float x_uT;
     float y_uT;
     float z_uT;
 
-    float heading_deg;
-
+    /* Kalman-filtered magnetometer data */
     float filtered_x_uT;
     float filtered_y_uT;
+
+    /* Heading comparison */
+    float heading_deg;
     float filtered_heading_deg;
 
-    float kalman_x_gain;
-    float kalman_x_innovation;
-    float kalman_x_covariance;
-
-    float kalman_y_gain;
-    float kalman_y_innovation;
-    float kalman_y_covariance;
-
-    float noise_mean_x_uT;
-    float noise_mean_y_uT;
-
-    float noise_variance_x_uT2;
-    float noise_variance_y_uT2;
-
+    /* Calibration status */
     uint8_t accuracy;
     uint8_t calibration_ok;
-    uint8_t kalman_active;
-
-    uint8_t noise_test_state;
-
-    uint32_t sample_count;
-    uint32_t noise_sample_count;
 
 } BNO085_DebugView_t;
 
-/*Welford ALgorithm*/
-typedef struct
-{
-    uint32_t count;
-    float mean;
-    float m2;
 
-} RunningStats_t;
-
-
-typedef enum
-{
-    MAG_NOISE_TEST_IDLE = 0,
-    MAG_NOISE_TEST_SETTLING,
-    MAG_NOISE_TEST_COLLECTING,
-    MAG_NOISE_TEST_COMPLETE
-
-} MagNoiseTestState_t;
 
 
 /* USER CODE END PTD */
@@ -105,9 +72,7 @@ typedef enum
 
 #define MAG_KALMAN_P0_UT2         1.0f
 
-/*Welford algorithm*/
-#define MAG_NOISE_SETTLE_TIME_MS      3000U
-#define MAG_NOISE_SAMPLE_COUNT        200U
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -137,10 +102,7 @@ const osThreadAttr_t CommunicationTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-/*Wrlford fuctions*/
-static void RunningStats_Reset(RunningStats_t *stats);
-static void RunningStats_Update(RunningStats_t *stats, float sample);
-static float RunningStats_GetVariance(const RunningStats_t *stats);
+
 /* USER CODE END FunctionPrototypes */
 
 void StartSensorTask(void *argument);
@@ -158,61 +120,12 @@ void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
    /* Run time stack overflow checking is performed if
    configCHECK_FOR_STACK_OVERFLOW is defined to 1 or 2. This hook function is
    called if a stack overflow is detected. */
+	(void)xTask;
+	(void)pcTaskName;
+
 	Error_Handler();
 }
 
-/*Welford functinos*/
-
-static void RunningStats_Reset(RunningStats_t *stats)
-{
-    if (stats == NULL)
-    {
-        return;
-    }
-
-    stats->count = 0U;
-    stats->mean = 0.0f;
-    stats->m2 = 0.0f;
-}
-
-
-static void RunningStats_Update(RunningStats_t *stats, float sample)
-{
-    float delta;
-    float delta2;
-
-    if (stats == NULL)
-    {
-        return;
-    }
-
-    stats->count++;
-
-    delta = sample - stats->mean;
-
-    stats->mean +=
-        delta / (float)stats->count;
-
-    delta2 = sample - stats->mean;
-
-    stats->m2 +=
-        delta * delta2;
-}
-
-
-static float RunningStats_GetVariance(const RunningStats_t *stats)
-{
-    if ((stats == NULL) || (stats->count < 2U))
-    {
-        return 0.0f;
-    }
-
-    /*
-     * Sample variance.
-     */
-    return stats->m2 /
-           (float)(stats->count - 1U);
-}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN 5 */
@@ -286,25 +199,25 @@ void StartSensorTask(void *argument)
 {
   /* USER CODE BEGIN StartSensorTask */
 	BNO085_MagData_t mag_data = {0};
-	uint8_t calibration_request_sent = 0U;
-	uint8_t magnetometer_configured = 0U;
-	uint8_t normal_rate_configured = 0U;
 
 	Kalman1D_t mag_x_filter = {0};
 	Kalman1D_t mag_y_filter = {0};
 
+
+	uint8_t calibration_request_sent = 0U;
+	uint8_t magnetometer_configured = 0U;
+	uint8_t normal_rate_configured = 0U;
+
+
 	uint32_t previous_filter_tick = 0U;
 	uint8_t filter_time_valid = 0U;
 
-	/*Welford*/
-	RunningStats_t mag_x_stats = {0};
-	RunningStats_t mag_y_stats = {0};
-	MagNoiseTestState_t noise_test_state =MAG_NOISE_TEST_IDLE;
-	uint32_t noise_settle_start_tick = 0U;
+	(void)argument;
 
-	RunningStats_Reset(&mag_x_stats);
-	RunningStats_Reset(&mag_y_stats);
-
+	/*
+	 * Initialize independent scalar Kalman filters	 * for magnetic X and Y components.
+	 *
+	 */
 	if (Kalman1D_Init(&mag_x_filter, MAG_KALMAN_Q_UT2_PER_S, MAG_KALMAN_X_R_UT2,MAG_KALMAN_P0_UT2) == 0U)
 	{
 		Error_Handler();
@@ -314,175 +227,125 @@ void StartSensorTask(void *argument)
 	{
 		Error_Handler();
 	}
-	(void)argument;
+
+
 
 	if (BNO085_Init() != HAL_OK)
 	{
 		Error_Handler();
 	}
+
+
   /* Infinite loop */
 	for (;;)
-	    {
-	        BNO085_Process();
+	{
+		BNO085_Process();
 
-	        if ((BNO085_IsProductIDReceived() != 0U) &&
-	            (calibration_request_sent == 0U))
+		/*
+		 * Enable dynamic magnetometer calibration
+		 */
+		if ((BNO085_IsProductIDReceived() != 0U) && (calibration_request_sent == 0U))
+		{
+
+			if (BNO085_EnableMagCalibration() == HAL_OK)
+			{
+				calibration_request_sent = 1U;
+			}
+		}
+
+		/*
+		 * 50 Hz reports while calibrating
+		 */
+		if ((calibration_request_sent != 0U) && (magnetometer_configured == 0U))
+		{
+
+			if (BNO085_EnableMagnetometer(BNO_MAG_CAL_INTERVAL_US) == HAL_OK)
+			{
+				magnetometer_configured = 1U;
+			}
+		}
+
+
+		if (BNO085_GetMagnetometer(&mag_data) != 0U)
+		{
+
+			float raw_heading_deg;
+
+			/*
+			 * Calibrated but unfiltered magnetic-field data.
+			 */
+			bno_debug_view.x_uT = mag_data.x_uT;
+			bno_debug_view.y_uT = mag_data.y_uT;
+			bno_debug_view.z_uT = mag_data.z_uT;
+
+			bno_debug_view.accuracy = mag_data.accuracy;
+
+			/*
+			 * Raw heading:calibrated but unfiltered magnetometer
+			 */
+
+			if (Heading_Calculate(mag_data.x_uT, mag_data.y_uT,&raw_heading_deg) != 0U)
+			{
+
+				bno_debug_view.heading_deg = raw_heading_deg;
+			}
+
+			/*
+			 * After high calibration accuracy start normal operation at 10Hz
+			 */
+			if ((mag_data.accuracy == 3U) && (normal_rate_configured == 0U))
+			{
+				bno_debug_view.calibration_ok = 1U;
+
+				if (BNO085_EnableMagnetometer(BNO_MAG_RUN_INTERVAL_US)	== HAL_OK)
+				{
+					normal_rate_configured = 1U;
+
+					Kalman1D_Reset(&mag_x_filter);
+					Kalman1D_Reset(&mag_y_filter);
+
+					filter_time_valid = 0U;
+				}
+			}
+
+			/*
+			 * Apply Kalman Fİlter
+			 */
+			if (normal_rate_configured != 0U)
 	        {
-	            if (BNO085_EnableMagCalibration() == HAL_OK)
-	            {
-	                calibration_request_sent = 1U;
-	            }
+
+				 float filtered_x_uT;
+				 float filtered_y_uT;
+				 float filtered_heading_deg;
+				 float dt_s = 0.0f;
+
+				 uint32_t current_tick = HAL_GetTick();
+
+	        	 if (filter_time_valid != 0U)
+	        	 {
+	        		  dt_s = (float)(current_tick - previous_filter_tick)  * 0.001f;
+	        	 }
+	       		 else
+	       		 {
+	       			  filter_time_valid = 1U;
+	       		 }
+
+	       		 previous_filter_tick = current_tick;
+	       		 if ((Kalman1D_Update(&mag_x_filter,mag_data.x_uT,dt_s,&filtered_x_uT) != 0U) &&  (Kalman1D_Update(&mag_y_filter, mag_data.y_uT,dt_s, &filtered_y_uT) != 0U))
+	       		 {
+	       			 bno_debug_view.filtered_x_uT = filtered_x_uT;
+	       			 bno_debug_view.filtered_y_uT = filtered_y_uT;
+
+	       			 if (Heading_Calculate(filtered_x_uT,filtered_y_uT,&filtered_heading_deg) != 0U)
+	        		 {
+	        			 bno_debug_view.filtered_heading_deg =filtered_heading_deg;
+	        		 }
+	        	 }
 	        }
+		}
 
-	        if ((calibration_request_sent != 0U) &&
-	            (magnetometer_configured == 0U))
-	        {
-	            if (BNO085_EnableMagnetometer(BNO_MAG_CAL_INTERVAL_US) == HAL_OK)
-	            {
-	                magnetometer_configured = 1U;
-	            }
-	        }
-	        if (BNO085_GetMagnetometer(&mag_data) != 0U)
-	        {
-	        	float raw_heading_deg;
-	        	float filtered_heading_deg;
-	        	float filtered_x_uT;
-	        	float filtered_y_uT;
-	        	float dt_s = 0.0f;
-	        	uint32_t current_tick;
-
-	        	/*
-	        	 * Raw calibrated magnetometer values.
-	             */
-	        	bno_debug_view.x_uT = mag_data.x_uT;
-	        	bno_debug_view.y_uT = mag_data.y_uT;
-	        	bno_debug_view.z_uT = mag_data.z_uT;
-
-	        	bno_debug_view.accuracy = mag_data.accuracy;
-	        	bno_debug_view.sample_count++;
-	        	/*
-	        	 * Raw heading:
-	        	 * calibrated magnetometer -> atan2(Y, X)
-	        	 */
-	        	if (Heading_Calculate(mag_data.x_uT,mag_data.y_uT,&raw_heading_deg) != 0U)
-	        	{
-	        		 bno_debug_view.heading_deg = raw_heading_deg;
-	        	}
-
-
-	        	if ((mag_data.accuracy == 3U) && (normal_rate_configured == 0U))
-	        	{
-	        		bno_debug_view.calibration_ok = 1U;
-
-	        		if (BNO085_EnableMagnetometer(BNO_MAG_RUN_INTERVAL_US) == HAL_OK)
-	        		{
-	        			normal_rate_configured = 1U;
-	        			Kalman1D_Reset(&mag_x_filter);
-	        			Kalman1D_Reset(&mag_y_filter);
-	        			filter_time_valid = 0U;
-	        			bno_debug_view.kalman_active = 1U;
-	        			/*WLford*/
-	        			 RunningStats_Reset(&mag_x_stats);
-	        			 RunningStats_Reset(&mag_y_stats);
-	        			 noise_settle_start_tick = HAL_GetTick();
-	        			 noise_test_state =  MAG_NOISE_TEST_SETTLING;
-	        			 bno_debug_view.noise_test_state =  (uint8_t)noise_test_state;
-	        			 bno_debug_view.noise_sample_count = 0U;
-	        		}
-	        	}
-	        	 /*
-	        	     * Measurement-noise characterization.
-	        	     *
-	        	     * Uses RAW calibrated magnetometer values.
-	        	     */
-	        	  if (noise_test_state == MAG_NOISE_TEST_SETTLING)
-	        	    {
-	        	        if ((HAL_GetTick() - noise_settle_start_tick) >=
-	        	            MAG_NOISE_SETTLE_TIME_MS)
-	        	        {
-	        	            RunningStats_Reset(&mag_x_stats);
-	        	            RunningStats_Reset(&mag_y_stats);
-
-	        	            noise_test_state =
-	        	                MAG_NOISE_TEST_COLLECTING;
-
-	        	            bno_debug_view.noise_test_state =
-	        	                (uint8_t)noise_test_state;
-	        	        }
-	        	    }
-	        	    else if (noise_test_state == MAG_NOISE_TEST_COLLECTING)
-	        	    {
-	        	        RunningStats_Update(&mag_x_stats,
-	        	                            mag_data.x_uT);
-
-	        	        RunningStats_Update(&mag_y_stats,
-	        	                            mag_data.y_uT);
-
-	        	        bno_debug_view.noise_sample_count =
-	        	            mag_x_stats.count;
-
-	        	        bno_debug_view.noise_mean_x_uT =
-	        	            mag_x_stats.mean;
-
-	        	        bno_debug_view.noise_mean_y_uT =
-	        	            mag_y_stats.mean;
-
-	        	        if (mag_x_stats.count >=
-	        	            MAG_NOISE_SAMPLE_COUNT)
-	        	        {
-	        	            bno_debug_view.noise_variance_x_uT2 =
-	        	                RunningStats_GetVariance(&mag_x_stats);
-
-	        	            bno_debug_view.noise_variance_y_uT2 =
-	        	                RunningStats_GetVariance(&mag_y_stats);
-
-	        	            noise_test_state =
-	        	                MAG_NOISE_TEST_COMPLETE;
-
-	        	            bno_debug_view.noise_test_state =
-	        	                (uint8_t)noise_test_state;
-	        	        }
-	        	    }
-
-
-	        	/************************************************************/
-
-	        	if (normal_rate_configured != 0U)
-	        	{
-	        		current_tick = HAL_GetTick();
-	        		if (filter_time_valid != 0U)
-	        		{
-	        			 dt_s = (float)(current_tick - previous_filter_tick)  * 0.001f;
-	        		}
-	        		else
-	        		{
-	        			 dt_s = 0.0f;
-	        			 filter_time_valid = 1U;
-	        		}
-
-	        		previous_filter_tick = current_tick;
-	        		if ((Kalman1D_Update(&mag_x_filter,mag_data.x_uT,dt_s,&filtered_x_uT) != 0U) &&  (Kalman1D_Update(&mag_y_filter, mag_data.y_uT,dt_s, &filtered_y_uT) != 0U))
-	        		{
-	        			bno_debug_view.filtered_x_uT = filtered_x_uT;
-	        			bno_debug_view.filtered_y_uT = filtered_y_uT;
-
-	        			 bno_debug_view.kalman_x_gain = mag_x_filter.last_gain;
-	        			 bno_debug_view.kalman_x_innovation = mag_x_filter.last_innovation;
-	        			 bno_debug_view.kalman_x_covariance =  mag_x_filter.error_covariance;
-	        			 bno_debug_view.kalman_y_gain = mag_y_filter.last_gain;
-	        			 bno_debug_view.kalman_y_innovation =  mag_y_filter.last_innovation;
-	        			 bno_debug_view.kalman_y_covariance = mag_y_filter.error_covariance;
-
-	        			if (Heading_Calculate(filtered_x_uT,filtered_y_uT,&filtered_heading_deg) != 0U)
-	        			{
-	        				 bno_debug_view.filtered_heading_deg =filtered_heading_deg;
-	        			}
-	        		}
-	        	}
-
-	        }
-	        osDelay(1U);
-	    }
+	    osDelay(1U);
+	}
   /* USER CODE END StartSensorTask */
 }
 
