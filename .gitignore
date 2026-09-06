@@ -127,3 +127,8 @@ desktop.ini
 *.backup
 *.old
 *.orig
+# STM32CubeIDE user-specific debug configuration
+*.launch
+
+# STM32CubeIDE SFR view state
+com.st.stm32cube.ide.mcu.sfrview.prefs

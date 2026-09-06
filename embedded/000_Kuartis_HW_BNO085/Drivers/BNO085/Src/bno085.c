@@ -32,7 +32,8 @@
 #define BNO_REPORT_COMMAND_REQUEST           0xF2U
 #define BNO_COMMAND_ME_CALIBRATION           0x07U
 #define BNO_COMMAND_INITIALIZE_UNSOLICITED   0x84U
-/*Dynamic Calibration Data Macros*/
+
+/* SH-2 command response */
 #define BNO_REPORT_COMMAND_RESPONSE          0xF1U
 
 
@@ -46,11 +47,9 @@ static uint8_t bno_rx_payload[BNO_RX_BUFFER_SIZE] = {0};
 
 static uint8_t bno_tx_seq[BNO_CHANNEL_COUNT] = {0}; // SHTP Header sequence number.
 
-static uint16_t bno_raw_length = 0U;
-static uint16_t bno_packet_len = 0U;
+
 static uint16_t bno_payload_len = 0U;
 
-static uint8_t bno_continuation = 0U; // Check the bit 15 if it is 1 transfer is not done you should read again.
 
 static uint8_t bno_product_id_received = 0U;
 
@@ -70,16 +69,7 @@ static uint8_t bno_command_seq = 0U;  // SH-2 Command REquest payload sequence n
 
 
 static uint8_t bno_init_complete_received = 0U;
-/*Geçici*/
-volatile uint32_t bno_debug_ch0_count = 0U;
-volatile uint32_t bno_debug_ch1_count = 0U;
-volatile uint32_t bno_debug_ch2_count = 0U;
-volatile uint32_t bno_debug_ch3_count = 0U;
 
-volatile uint8_t  bno_debug_last_channel = 0U;
-volatile uint16_t bno_debug_last_payload_len = 0U;
-volatile uint8_t  bno_debug_last_payload0 = 0U;
-volatile uint8_t  bno_debug_last_payload5 = 0U;
 
 /* ---------- PRIVATE FUNCTION PROTOTYPES ---------- */
 
@@ -103,7 +93,8 @@ static HAL_StatusTypeDef BNO085_RequestSHTPErrorList(void);
 static HAL_StatusTypeDef BNO085_ReadPacket(void)
 {
 	uint8_t dummy_header[4] = {0};
-
+	uint16_t raw_length;
+	uint16_t packet_len;
 	HAL_GPIO_WritePin(BNO_CS_GPIO_Port, BNO_CS_Pin, GPIO_PIN_RESET);
 
 	/* ---------- SHTP HEADER ---------- */
@@ -117,29 +108,21 @@ static HAL_StatusTypeDef BNO085_ReadPacket(void)
 	}
 
 	/* bno_header[0] == LSB Bits Of length, bno_header[1] MSB Bits Of length and 15 bit is continuation bit*/
-	bno_raw_length = ( (uint16_t)bno_header[0] | ( (uint16_t)bno_header[1] << 8) );
+	raw_length = ( (uint16_t)bno_header[0] | ( (uint16_t)bno_header[1] << 8) );
 
 	// Data lenght can not be 0xFFFF it means Error
-	if(bno_raw_length == 0xFFFFU)
+	if(raw_length == 0xFFFFU)
 	{
 		HAL_GPIO_WritePin(BNO_CS_GPIO_Port, BNO_CS_Pin, GPIO_PIN_SET);
 
 		return HAL_ERROR;
 	}
 
-	if ( (bno_raw_length & 0x8000) != 0U)
-	{
-		bno_continuation = 1U;
-	}
-	else
-	{
-		bno_continuation = 0U;
-	}
 
 	/* Bits 14:0 = Real packet length */
-	bno_packet_len = ( (uint16_t)bno_header[0] | ( (uint16_t)bno_header[1] << 8) ) & 0x7FFF;
+	packet_len = ( (uint16_t)bno_header[0] | ( (uint16_t)bno_header[1] << 8) ) & 0x7FFF;
 
-	if(bno_packet_len == 0U)
+	if(packet_len == 0U)
 	{
 		/* NULL HEADER*/
 		bno_payload_len = 0U;
@@ -148,7 +131,7 @@ static HAL_StatusTypeDef BNO085_ReadPacket(void)
 		return HAL_OK;
 	}
 
-	if (bno_packet_len < 4U)
+	if (packet_len < 4U)
 	{
 		/* HEADER CAN NOT BE LESS THAN 4 BYTES*/
 		HAL_GPIO_WritePin(BNO_CS_GPIO_Port, BNO_CS_Pin, GPIO_PIN_SET);
@@ -156,7 +139,7 @@ static HAL_StatusTypeDef BNO085_ReadPacket(void)
 		return HAL_ERROR;
 	}
 
-	bno_payload_len = bno_packet_len - 4U;
+	bno_payload_len = packet_len - 4U;
 
 	if(bno_payload_len > sizeof(bno_rx_payload) )
 	{
@@ -342,11 +325,7 @@ static void BNO085_Reset(void)
 {
 	bno_int_flag = 0;
 	bno_product_id_received = 0U;
-	bno_raw_length = 0U;
-	bno_packet_len = 0U;
 	bno_payload_len = 0U;
-	bno_continuation = 0U;
-
 	bno_reset_cause = 0U;
 	bno_shtp_error_request_sent = 0U;
 	bno_shtp_error_list_received = 0U;
@@ -516,40 +495,7 @@ void BNO085_Process(void)
     			bno_int_flag = 0U;
     			return;
     		}
-    		bno_debug_last_channel = bno_header[2];
-    		bno_debug_last_payload_len = bno_payload_len;
 
-    		if (bno_payload_len > 0U)
-    		{
-    		    bno_debug_last_payload0 = bno_rx_payload[0];
-    		}
-
-    		if (bno_payload_len > 5U)
-    		{
-    		    bno_debug_last_payload5 = bno_rx_payload[5];
-    		}
-
-    		switch (bno_header[2])
-    		{
-    		    case 0U:
-    		        bno_debug_ch0_count++;
-    		        break;
-
-    		    case 1U:
-    		        bno_debug_ch1_count++;
-    		        break;
-
-    		    case 2U:
-    		        bno_debug_ch2_count++;
-    		        break;
-
-    		    case 3U:
-    		        bno_debug_ch3_count++;
-    		        break;
-
-    		    default:
-    		        break;
-    		}
     		bno_int_flag = 0U;
 
     		bno_last_status = BNO085_ReadPacket();
@@ -586,15 +532,18 @@ void BNO085_Process(void)
     		 /********** Magnetometer Report Check **********/
     		 if( (bno_header[2] == BNO_CHANNEL_INPUT_REPORTS) && (bno_payload_len >= 15U) && (bno_rx_payload[0] == BNO_REPORT_BASE_TIMESTAMP) && (bno_rx_payload[5] == BNO_REPORT_MAGNETIC_FIELD_CALIBRATED) )
     		 {
+    			 int16_t x_raw;
+    			 int16_t y_raw;
+    			 int16_t z_raw;
     			 bno_mag_data.accuracy = bno_rx_payload[7] & 0x03U; //Read 2 bit accurac
-    			 bno_mag_data.x_raw = (int16_t)((uint16_t)bno_rx_payload[9] | ((uint16_t)bno_rx_payload[10] << 8)); // X axis LSB and MSB
-    			 bno_mag_data.y_raw = (int16_t)((uint16_t)bno_rx_payload[11] | ((uint16_t)bno_rx_payload[12] << 8)); // Y axis LSB and MSB
-    			 bno_mag_data.z_raw = (int16_t)((uint16_t)bno_rx_payload[13] | ((uint16_t)bno_rx_payload[14] << 8)); // Z axis LSB and MSB
+    			 x_raw = (int16_t)((uint16_t)bno_rx_payload[9] | ((uint16_t)bno_rx_payload[10] << 8)); // X axis LSB and MSB
+    			 y_raw = (int16_t)((uint16_t)bno_rx_payload[11] | ((uint16_t)bno_rx_payload[12] << 8)); // Y axis LSB and MSB
+    			 z_raw = (int16_t)((uint16_t)bno_rx_payload[13] | ((uint16_t)bno_rx_payload[14] << 8)); // Z axis LSB and MSB
 
     			 /* BNO085 sends calibrated magnetic field values in Q4 fixed-point format. */
-    			 bno_mag_data.x_uT = (float)bno_mag_data.x_raw / 16.0f; // Calibrated x axis data
-    			 bno_mag_data.y_uT = (float)bno_mag_data.y_raw / 16.0f; // Calibrated y axis data
-    			 bno_mag_data.z_uT = (float)bno_mag_data.z_raw / 16.0f; // Calibrated z axis data
+    			 bno_mag_data.x_uT = (float)x_raw / 16.0f; // Calibrated x axis data
+    			 bno_mag_data.y_uT = (float)y_raw / 16.0f; // Calibrated y axis data
+    			 bno_mag_data.z_uT = (float)z_raw / 16.0f; // Calibrated z axis data
 
     			 bno_mag_data_ready = 1U;
     		 }
