@@ -275,14 +275,12 @@ void StartSensorTask(void *argument)
 	Kalman1D_t mag_x_filter = {0};
 	Kalman1D_t mag_y_filter = {0};
 
-
-	uint8_t calibration_request_sent = 0U;
-	uint8_t magnetometer_configured = 0U;
-	uint8_t normal_rate_configured = 0U;
-
-
 	uint32_t previous_filter_tick = 0U;
-	uint8_t filter_time_valid = 0U;
+	uint8_t filter_time_valid = 0U; // First sample flag
+
+	uint32_t state_start_tick = 0U;
+	uint32_t last_data_tick = 0U;
+
 
 	(void)argument;
 
@@ -300,129 +298,260 @@ void StartSensorTask(void *argument)
 		Error_Handler();
 	}
 
+	system_status.sensor_state = SENSOR_STATE_STARTUP; // Init state
 
 
-	if (BNO085_Init() != HAL_OK)
-	{
-		Error_Handler();
-	}
 
-
-  /* Infinite loop */
 	for (;;)
 	{
-		BNO085_Process();
-
-		/*
-		 * Enable dynamic magnetometer calibration
-		 */
-		if ((BNO085_IsProductIDReceived() != 0U) && (calibration_request_sent == 0U))
+		switch(system_status.sensor_state)
 		{
+		case SENSOR_STATE_STARTUP:
+		{
+			bno_debug_view.calibration_ok = 0U;
+			filter_time_valid = 0U;
 
-			if (BNO085_EnableMagCalibration() == HAL_OK)
+			if(BNO085_Init() == HAL_OK)
 			{
-				calibration_request_sent = 1U;
+				state_start_tick = HAL_GetTick();
+				system_status.sensor_state = SENSOR_STATE_WAIT_PRODUCT_ID; // After succes initialization, swtich the state
 			}
+			else // If initialization is not succesful
+			{
+				system_status.sensor_error = SENSOR_ERROR_INIT;
+				system_status.sensor_recovery_count++; // System recovery counter
+				state_start_tick = HAL_GetTick();
+				system_status.sensor_state = SENSOR_STATE_RECOVERY; // Go to recovery state after initialization error
+
+			}
+			break;
 		}
-
-		/*
-		 * 50 Hz reports while calibrating
-		 */
-		if ((calibration_request_sent != 0U) && (magnetometer_configured == 0U))
+		case SENSOR_STATE_WAIT_PRODUCT_ID:
 		{
+			BNO085_Process();
 
-			if (BNO085_EnableMagnetometer(BNO_MAG_CAL_INTERVAL_US) == HAL_OK)
+			if (BNO085_GetLastStatus() != HAL_OK)
 			{
-				magnetometer_configured = 1U;
+				system_status.sensor_error = SENSOR_ERROR_COMMUNICATION;
+				system_status.sensor_recovery_count++;
+				state_start_tick = HAL_GetTick();
+				system_status.sensor_state = SENSOR_STATE_RECOVERY; // Go to recovery state if BNO085 state is not OK
+
+				break;
 			}
-		}
-
-
-		if (BNO085_GetMagnetometer(&mag_data) != 0U)
-		{
-
-			float raw_heading_deg;
-
-			/*
-			 * Calibrated but unfiltered magnetic-field data.
-			 */
-			bno_debug_view.x_uT = mag_data.x_uT;
-			bno_debug_view.y_uT = mag_data.y_uT;
-			bno_debug_view.z_uT = mag_data.z_uT;
-
-			bno_debug_view.accuracy = mag_data.accuracy;
-
-			/*
-			 * Raw heading:calibrated but unfiltered magnetometer
-			 */
-
-			if (Heading_Calculate(mag_data.x_uT, mag_data.y_uT,&raw_heading_deg) != 0U)
+			if(BNO085_IsProductIDReceived() != 0U)
 			{
-
-				bno_debug_view.heading_deg = raw_heading_deg;
-			}
-
-			/*
-			 * After high calibration accuracy start normal operation at 10Hz
-			 */
-			if ((mag_data.accuracy == 3U) && (normal_rate_configured == 0U))
-			{
-				bno_debug_view.calibration_ok = 1U;
-
-				if (BNO085_EnableMagnetometer(BNO_MAG_RUN_INTERVAL_US)	== HAL_OK)
+				if(BNO085_EnableMagCalibration() != HAL_OK)
 				{
-					normal_rate_configured = 1U;
+					system_status.sensor_error = SENSOR_ERROR_CONFIGURATION; // Mag calibration is not started succesfully
+					system_status.sensor_recovery_count++;
+					state_start_tick = HAL_GetTick();
 
+					system_status.sensor_state = SENSOR_STATE_RECOVERY;
+
+					break;
+				}
+				if(BNO085_EnableMagnetometer(BNO_MAG_CAL_INTERVAL_US) != HAL_OK)
+				{
+					system_status.sensor_error = SENSOR_ERROR_CONFIGURATION;
+					system_status.sensor_recovery_count++;
+					state_start_tick = HAL_GetTick();
+					system_status.sensor_state = SENSOR_STATE_RECOVERY;
+
+					break;
+				}
+				last_data_tick = HAL_GetTick();
+				system_status.sensor_state = SENSOR_STATE_CALIBRATING; // Mag is enable and mag calibration is started.
+			}
+			else if((HAL_GetTick() - state_start_tick) >= BNO_PRODUCT_ID_TIMEOUT_MS)
+			{
+				system_status.sensor_error = SENSOR_ERROR_PRODUCT_ID_TIMEOUT;
+				system_status.sensor_recovery_count++;
+				state_start_tick = HAL_GetTick();
+				system_status.sensor_state = SENSOR_STATE_RECOVERY;
+			}
+			break;
+		}
+
+		case SENSOR_STATE_CALIBRATING:
+		{
+			BNO085_Process();
+
+			if(BNO085_GetLastStatus() != HAL_OK)
+			{
+				system_status.sensor_error =  SENSOR_ERROR_COMMUNICATION;
+				system_status.sensor_recovery_count++;
+				state_start_tick = HAL_GetTick();
+			    system_status.sensor_state = SENSOR_STATE_RECOVERY;
+
+			    break;
+			}
+			if (BNO085_GetMagnetometer(&mag_data) != 0U)
+			{
+				float raw_heading_deg;
+
+				last_data_tick = HAL_GetTick();
+
+				/*Debug variables*/
+				bno_debug_view.x_uT = mag_data.x_uT;
+				bno_debug_view.y_uT = mag_data.y_uT;
+				bno_debug_view.z_uT = mag_data.z_uT;
+				bno_debug_view.accuracy = mag_data.accuracy;
+
+				if(Heading_Calculate(mag_data.x_uT, mag_data.y_uT, &raw_heading_deg) != 0U)
+				{
+					bno_debug_view.heading_deg =  raw_heading_deg; // DEBUG Variable for raw heading.
+				}
+
+				if(mag_data.accuracy == 3U) // If calibration is succesfull and accuracy is high
+				{
+					if(BNO085_EnableMagnetometer(BNO_MAG_RUN_INTERVAL_US) != HAL_OK) // MAG config 10 HZ
+					{
+						system_status.sensor_error = SENSOR_ERROR_CONFIGURATION;
+						system_status.sensor_recovery_count++;
+						state_start_tick = HAL_GetTick();
+
+						system_status.sensor_state = SENSOR_STATE_RECOVERY;
+
+						break;
+					}
+					bno_debug_view.calibration_ok = 1U; // Calibration is done
+
+					/* Reset Kalman Filter */
 					Kalman1D_Reset(&mag_x_filter);
 					Kalman1D_Reset(&mag_y_filter);
 
 					filter_time_valid = 0U;
+					last_data_tick = HAL_GetTick();
+
+					system_status.sensor_state = SENSOR_STATE_RUNNING;
 				}
 			}
+			else if((HAL_GetTick() - last_data_tick) >= BNO_DATA_TIMEOUT_MS)
+			{
+				system_status.sensor_error = SENSOR_ERROR_DATA_TIMEOUT;
 
-			/*
-			 * Apply Kalman Fİlter
-			 */
-			if (normal_rate_configured != 0U)
-	        {
+				system_status.sensor_recovery_count++;
 
-				 float filtered_x_uT;
-				 float filtered_y_uT;
-				 float filtered_heading_deg;
-				 float dt_s = 0.0f;
+				state_start_tick = HAL_GetTick();
 
-				 uint32_t current_tick = HAL_GetTick();
-
-	        	 if (filter_time_valid != 0U)
-	        	 {
-	        		  dt_s = (float)(current_tick - previous_filter_tick)  * 0.001f;
-	        	 }
-	       		 else
-	       		 {
-	       			  filter_time_valid = 1U;
-	       		 }
-
-	       		 previous_filter_tick = current_tick;
-	       		 if ((Kalman1D_Update(&mag_x_filter,mag_data.x_uT,dt_s,&filtered_x_uT) != 0U) &&  (Kalman1D_Update(&mag_y_filter, mag_data.y_uT,dt_s, &filtered_y_uT) != 0U))
-	       		 {
-	       			 bno_debug_view.filtered_x_uT = filtered_x_uT;
-	       			 bno_debug_view.filtered_y_uT = filtered_y_uT;
-
-	       			 if (Heading_Calculate(filtered_x_uT,filtered_y_uT,&filtered_heading_deg) != 0U)
-	        		 {
-	       				 HeadingMessage_t heading_message;
-
-	        			 bno_debug_view.filtered_heading_deg = filtered_heading_deg;
-
-	        			 heading_message.heading_deg = filtered_heading_deg;
-
-	        			 (void)osMessageQueuePut(heading_queue_handle, &heading_message, 0U, 0U);
-	        		 }
-	        	 }
-	        }
+				system_status.sensor_state = SENSOR_STATE_RECOVERY;
+			}
+			break;
 		}
 
-	    osDelay(1U);
+		case SENSOR_STATE_RUNNING:
+		{
+			BNO085_Process();
+
+			if(BNO085_GetLastStatus() != HAL_OK)
+			{
+				system_status.sensor_error = SENSOR_ERROR_COMMUNICATION;
+
+				system_status.sensor_recovery_count++;
+
+				state_start_tick = HAL_GetTick();
+
+				system_status.sensor_state = SENSOR_STATE_RECOVERY;
+
+				break;
+			}
+			if(BNO085_GetMagnetometer(&mag_data) != 0U)
+			{
+				float raw_heading_deg;
+
+				/*Kalman Filter outputs*/
+				float filtered_x_uT;
+				float filtered_y_uT;
+				float filtered_heading_deg;
+
+				float dt_s = 0.0f; // Sample time
+
+				uint32_t current_tick = HAL_GetTick();
+
+				last_data_tick = current_tick;
+
+				/*Debug variables*/
+				bno_debug_view.x_uT = mag_data.x_uT;
+				bno_debug_view.y_uT = mag_data.y_uT;
+				bno_debug_view.z_uT = mag_data.z_uT;
+				bno_debug_view.accuracy = mag_data.accuracy;
+
+				if (Heading_Calculate(mag_data.x_uT, mag_data.y_uT, &raw_heading_deg) != 0U)
+				{
+					bno_debug_view.heading_deg = raw_heading_deg;
+				}
+
+				if(filter_time_valid != 0U)
+				{
+					dt_s = (float)(current_tick - previous_filter_tick ) * 0.001f;
+				}
+				else
+				{
+					filter_time_valid = 1U;
+				}
+
+				previous_filter_tick = current_tick;
+
+				if ((Kalman1D_Update(&mag_x_filter, mag_data.x_uT, dt_s,&filtered_x_uT) != 0U)&& (Kalman1D_Update(&mag_y_filter, mag_data.y_uT, dt_s,&filtered_y_uT) != 0U))
+				{
+					/*DEBUG variables*/
+					 bno_debug_view.filtered_x_uT =  filtered_x_uT;
+					 bno_debug_view.filtered_y_uT =  filtered_y_uT;
+
+					 if(Heading_Calculate(filtered_x_uT, filtered_y_uT, &filtered_heading_deg) != 0U)
+					 {
+						 HeadingMessage_t heading_message;
+						 bno_debug_view.filtered_heading_deg = filtered_heading_deg;
+
+						 heading_message.heading_deg = filtered_heading_deg; // Read filtered heading for queue
+
+						 if(osMessageQueuePut(heading_queue_handle, &heading_message, 0U, 0U) != osOK)
+						 {
+							 system_status.communication_error = COMM_ERROR_QUEUE_FULL;
+
+							 system_status.queue_drop_count++;
+						 }
+					 }
+				}
+			}
+			else if((HAL_GetTick() - last_data_tick) >= BNO_DATA_TIMEOUT_MS)
+			{
+				system_status.sensor_error = SENSOR_ERROR_DATA_TIMEOUT;
+				system_status.sensor_recovery_count++;
+
+				state_start_tick = HAL_GetTick();
+
+				system_status.sensor_state = SENSOR_STATE_RECOVERY;
+			}
+			break;
+		}
+
+		case SENSOR_STATE_RECOVERY:
+		{
+			if( (HAL_GetTick() - state_start_tick) >= BNO_RECOVERY_DELAY_MS)
+			{
+				filter_time_valid = 0U;
+
+				system_status.sensor_state = SENSOR_STATE_STARTUP;
+			}
+			break;
+		}
+
+		default:
+		{
+			system_status.sensor_error = SENSOR_ERROR_CONFIGURATION;
+			system_status.sensor_recovery_count++;
+			state_start_tick = HAL_GetTick();
+
+			system_status.sensor_state = SENSOR_STATE_RECOVERY;
+
+			break;
+		}
+
+	  }
+
+	   osDelay(1U);
 	}
   /* USER CODE END StartSensorTask */
 }
@@ -450,15 +579,35 @@ void StartCommunicationTask(void *argument)
 
     for (;;)
     {
-		if (osMessageQueueGet(heading_queue_handle, &heading_message,NULL,osWaitForever) == osOK)
+        if (osMessageQueueGet(heading_queue_handle,&heading_message, NULL,osWaitForever) == osOK)
         {
             size_t nmea_length;
+            HAL_StatusTypeDef tx_status;
 
-            nmea_length = NMEA_FormatHDM(heading_message.heading_deg, nmea_sentence, sizeof(nmea_sentence));
+            nmea_length =  NMEA_FormatHDM(heading_message.heading_deg,nmea_sentence,sizeof(nmea_sentence));
 
-            if (nmea_length > 0U)
+            if (nmea_length == 0U)
             {
-            	(void)UART_TX_Write((const uint8_t *)nmea_sentence,(uint16_t)nmea_length);
+                system_status.communication_error = COMM_ERROR_NMEA_FORMAT;
+
+                system_status.nmea_error_count++;
+
+                continue;
+            }
+
+            tx_status =  UART_TX_Write((const uint8_t *)nmea_sentence,  (uint16_t)nmea_length);
+
+            if (tx_status == HAL_BUSY)
+            {
+                system_status.communication_error = COMM_ERROR_UART_BUSY;
+
+                system_status.uart_busy_count++;
+            }
+            else if (tx_status != HAL_OK)
+            {
+                system_status.communication_error = COMM_ERROR_UART;
+
+                system_status.uart_error_count++;
             }
         }
     }

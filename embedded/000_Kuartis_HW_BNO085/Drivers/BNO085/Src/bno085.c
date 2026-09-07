@@ -380,13 +380,7 @@ static HAL_StatusTypeDef BNO085_WaitForStartupInt(uint32_t timeout_ms)
         {
             return HAL_TIMEOUT;
         }
-
-        if (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,BNO_INT_Pin) != GPIO_PIN_RESET)
-        {
-        	return HAL_ERROR;
-        }
     }
-
 
     if (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,BNO_INT_Pin) != GPIO_PIN_RESET)
     {
