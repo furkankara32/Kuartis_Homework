@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "bno085.h"
+#include "uart_tx.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -180,6 +181,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     {
         BNO085_NotifyInterrupt();
     }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    UART_TX_TxCpltCallback(huart);
 }
 /* USER CODE END 4 */
 

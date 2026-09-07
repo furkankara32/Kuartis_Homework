@@ -30,6 +30,7 @@
 #include "kalman_1d.h"
 #include "nmea.h"
 #include "usart.h"
+#include "uart_tx.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -61,23 +62,9 @@ typedef struct
 typedef struct
 {
 	float heading_deg; // Fİltered heading value
-	uint32_t timestamp_ms; // Tİmestamp value
-
 }HeadingMessage_t;
 
-typedef struct
-{
-    uint32_t sample_count;
 
-    uint32_t current_period_ms;
-    uint32_t min_period_ms;
-    uint32_t max_period_ms;
-
-    float average_period_ms;
-    float frequency_hz;
-    float peak_to_peak_jitter_ms;
-
-} CommunicationTimingDebug_t;
 
 /* USER CODE END PTD */
 
@@ -93,7 +80,6 @@ typedef struct
 
 #define MAG_KALMAN_P0_UT2         1.0f
 
-#define TIMING_WARMUP_SAMPLES    20U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -106,16 +92,7 @@ typedef struct
 static volatile BNO085_DebugView_t bno_debug_view = {0}; // It's for debug
 static osMessageQueueId_t heading_queue_handle;
 
-static volatile float comm_debug_heading_deg = 0.0f;
-static volatile uint32_t comm_debug_timestamp_ms = 0U;
 
-static char comm_debug_nmea[NMEA_HDM_BUFFER_SIZE] = {0};
-static volatile uint32_t comm_debug_nmea_length = 0U;
-
-static volatile uint32_t comm_debug_tx_count = 0U;
-static volatile uint32_t comm_debug_uart_error_count = 0U;
-
-static volatile CommunicationTimingDebug_t comm_timing_debug = {0};
 
 /* USER CODE END Variables */
 /* Definitions for SensorTask */
@@ -381,7 +358,6 @@ void StartSensorTask(void *argument)
 	        			 bno_debug_view.filtered_heading_deg = filtered_heading_deg;
 
 	        			 heading_message.heading_deg = filtered_heading_deg;
-	        			 heading_message.timestamp_ms = HAL_GetTick();
 
 	        			 (void)osMessageQueuePut(heading_queue_handle, &heading_message, 0U, 0U);
 	        		 }
@@ -403,117 +379,34 @@ void StartSensorTask(void *argument)
 /* USER CODE END Header_StartCommunicationTask */
 void StartCommunicationTask(void *argument)
 {
-  /* USER CODE BEGIN StartCommunicationTask */
-	HeadingMessage_t heading_message;
+    /* USER CODE BEGIN StartCommunicationTask */
 
-	uint32_t previous_tx_tick = 0U;
-	uint32_t period_sum_ms = 0U;
-	uint32_t timing_warmup_count = 0U;
-	uint8_t timing_valid = 0U;
+    HeadingMessage_t heading_message;
+    char nmea_sentence[NMEA_HDM_BUFFER_SIZE];
 
-	(void)argument;
-  /* Infinite loop */
-  for(;;)
-  {
-	  if(osMessageQueueGet(heading_queue_handle, &heading_message, NULL, osWaitForever) == osOK)
-	  {
-		  size_t nmea_length;
+    (void)argument;
 
-		  comm_debug_heading_deg = heading_message.heading_deg;
-		  comm_debug_timestamp_ms = heading_message.timestamp_ms;
+    if (UART_TX_Init(&huart3) != HAL_OK)
+    {
+        Error_Handler();
+    }
 
-		  nmea_length = NMEA_FormatHDM(heading_message.heading_deg,comm_debug_nmea,sizeof(comm_debug_nmea));
+    for (;;)
+    {
+		if (osMessageQueueGet(heading_queue_handle, &heading_message,NULL,osWaitForever) == osOK)
+        {
+            size_t nmea_length;
 
-		  comm_debug_nmea_length = (uint32_t)nmea_length;
+            nmea_length = NMEA_FormatHDM(heading_message.heading_deg, nmea_sentence, sizeof(nmea_sentence));
 
-		  if (nmea_length > 0U)
-		  {
-			  uint32_t current_tx_tick;
-			  current_tx_tick = HAL_GetTick();
+            if (nmea_length > 0U)
+            {
+            	(void)UART_TX_Write((const uint8_t *)nmea_sentence,(uint16_t)nmea_length);
+            }
+        }
+    }
 
-			  if (timing_valid != 0U)
-			  {
-			      uint32_t period_ms;
-
-			      period_ms =
-			          current_tx_tick -
-			          previous_tx_tick;
-
-			      /*
-			       * Ignore startup/transitional samples.
-			       */
-			      if (timing_warmup_count < TIMING_WARMUP_SAMPLES)
-			      {
-			          timing_warmup_count++;
-			      }
-			      else
-			      {
-			          comm_timing_debug.current_period_ms =
-			              period_ms;
-
-			          if (comm_timing_debug.sample_count == 0U)
-			          {
-			              comm_timing_debug.min_period_ms =
-			                  period_ms;
-
-			              comm_timing_debug.max_period_ms =
-			                  period_ms;
-			          }
-			          else
-			          {
-			              if (period_ms <
-			                  comm_timing_debug.min_period_ms)
-			              {
-			                  comm_timing_debug.min_period_ms =
-			                      period_ms;
-			              }
-
-			              if (period_ms >
-			                  comm_timing_debug.max_period_ms)
-			              {
-			                  comm_timing_debug.max_period_ms =
-			                      period_ms;
-			              }
-			          }
-
-			          period_sum_ms +=
-			              period_ms;
-
-			          comm_timing_debug.sample_count++;
-
-			          comm_timing_debug.average_period_ms =
-			              (float)period_sum_ms /
-			              (float)comm_timing_debug.sample_count;
-
-			          comm_timing_debug.frequency_hz =
-			              1000.0f /
-			              comm_timing_debug.average_period_ms;
-
-			          comm_timing_debug.peak_to_peak_jitter_ms =
-			              (float)(comm_timing_debug.max_period_ms -
-			                      comm_timing_debug.min_period_ms);
-			      }
-			  }
-			  else
-			  {
-			      timing_valid = 1U;
-			  }
-
-			  previous_tx_tick =
-			      current_tx_tick;
-			  if (HAL_UART_Transmit(&huart3,(uint8_t *)comm_debug_nmea,(uint16_t)nmea_length,20U) == HAL_OK)
-			  {
-				  comm_debug_tx_count++;
-			  }
-			  else
-			  {
-				  comm_debug_uart_error_count++;
-			  }
-		  }
-	  }
-
-  }
-  /* USER CODE END StartCommunicationTask */
+    /* USER CODE END StartCommunicationTask */
 }
 
 /* Private application code --------------------------------------------------*/
