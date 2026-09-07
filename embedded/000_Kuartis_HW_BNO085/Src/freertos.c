@@ -103,8 +103,8 @@ typedef struct
 {
     SensorState_t sensor_state;
 
-    SensorError_t sensor_error;
-    CommunicationError_t communication_error;
+    SensorError_t sensor_error;						 /* Last detected sensor error */
+    CommunicationError_t communication_error;		/* Last detected communication error */
 
     uint32_t sensor_recovery_count;
     uint32_t queue_drop_count;
@@ -582,7 +582,6 @@ void StartCommunicationTask(void *argument)
         if (osMessageQueueGet(heading_queue_handle,&heading_message, NULL,osWaitForever) == osOK)
         {
             size_t nmea_length;
-            HAL_StatusTypeDef tx_status;
 
             nmea_length =  NMEA_FormatHDM(heading_message.heading_deg,nmea_sentence,sizeof(nmea_sentence));
 
@@ -595,7 +594,7 @@ void StartCommunicationTask(void *argument)
                 continue;
             }
 
-            tx_status =  UART_TX_Write((const uint8_t *)nmea_sentence,  (uint16_t)nmea_length);
+            HAL_StatusTypeDef tx_status =  UART_TX_Write((const uint8_t *)nmea_sentence,  (uint16_t)nmea_length);
 
             if (tx_status == HAL_BUSY)
             {

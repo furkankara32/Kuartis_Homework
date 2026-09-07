@@ -120,7 +120,7 @@ static HAL_StatusTypeDef BNO085_ReadPacket(void)
 
 
 	/* Bits 14:0 = Real packet length */
-	packet_len = ( (uint16_t)bno_header[0] | ( (uint16_t)bno_header[1] << 8) ) & 0x7FFF;
+	packet_len = raw_length & 0x7FFFU;
 
 	if(packet_len == 0U)
 	{
@@ -323,7 +323,7 @@ static HAL_StatusTypeDef BNO085_DrainStartupPackets(void)
 
 static void BNO085_Reset(void)
 {
-	bno_int_flag = 0;
+	bno_int_flag = 0U;
 	bno_product_id_received = 0U;
 	bno_payload_len = 0U;
 	bno_reset_cause = 0U;
