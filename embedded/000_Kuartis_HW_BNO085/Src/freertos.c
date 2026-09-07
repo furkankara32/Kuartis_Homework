@@ -65,6 +65,54 @@ typedef struct
 }HeadingMessage_t;
 
 
+typedef enum
+{
+    SENSOR_STATE_STARTUP = 0U,
+    SENSOR_STATE_WAIT_PRODUCT_ID,
+    SENSOR_STATE_CALIBRATING,
+    SENSOR_STATE_RUNNING,
+    SENSOR_STATE_RECOVERY
+
+} SensorState_t;
+
+
+typedef enum
+{
+    SENSOR_ERROR_NONE = 0U,
+    SENSOR_ERROR_INIT,
+    SENSOR_ERROR_PRODUCT_ID_TIMEOUT,
+    SENSOR_ERROR_COMMUNICATION,
+    SENSOR_ERROR_CONFIGURATION,
+    SENSOR_ERROR_DATA_TIMEOUT
+
+} SensorError_t;
+
+
+typedef enum
+{
+    COMM_ERROR_NONE = 0U,
+    COMM_ERROR_QUEUE_FULL,
+    COMM_ERROR_NMEA_FORMAT,
+    COMM_ERROR_UART_BUSY,
+    COMM_ERROR_UART
+
+} CommunicationError_t;
+
+
+typedef struct
+{
+    SensorState_t sensor_state;
+
+    SensorError_t sensor_error;
+    CommunicationError_t communication_error;
+
+    uint32_t sensor_recovery_count;
+    uint32_t queue_drop_count;
+    uint32_t nmea_error_count;
+    uint32_t uart_busy_count;
+    uint32_t uart_error_count;
+
+} SystemStatus_t;
 
 /* USER CODE END PTD */
 
@@ -80,6 +128,10 @@ typedef struct
 
 #define MAG_KALMAN_P0_UT2         1.0f
 
+
+#define BNO_PRODUCT_ID_TIMEOUT_MS    1000U
+#define BNO_DATA_TIMEOUT_MS           500U
+#define BNO_RECOVERY_DELAY_MS        1000U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -92,7 +144,12 @@ typedef struct
 static volatile BNO085_DebugView_t bno_debug_view = {0}; // It's for debug
 static osMessageQueueId_t heading_queue_handle;
 
-
+static volatile SystemStatus_t system_status =
+{
+    .sensor_state = SENSOR_STATE_STARTUP,
+    .sensor_error = SENSOR_ERROR_NONE,
+    .communication_error = COMM_ERROR_NONE
+};
 
 /* USER CODE END Variables */
 /* Definitions for SensorTask */

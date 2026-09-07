@@ -166,7 +166,7 @@ uint8_t Kalman1D_Update(Kalman1D_t *filter,float measurement,float dt_s,float *f
      */
     correction_factor = 1.0f - kalman_gain;
 
-    filter->error_covariance =  (correction_factor *  correction_factor *  predicted_covariance) + (kalman_gain *  kalman_gain * kalman_gain * filter->measurement_noise);
+    filter->error_covariance =  (correction_factor *  correction_factor *  predicted_covariance) + (kalman_gain *  kalman_gain * filter->measurement_noise);
 
     *filtered_value = filter->state_estimate;
 

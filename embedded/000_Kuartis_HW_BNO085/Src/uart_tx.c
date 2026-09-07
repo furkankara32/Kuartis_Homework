@@ -38,7 +38,7 @@ static uint16_t UART_TX_GetFreeSpace(void)
 
     if (head >= tail)
     {
-        return (uint16_t)UART_TX_BUFFER_SIZE - ( (head - tail) -  1U);
+		return (uint16_t) (UART_TX_BUFFER_SIZE - (head - tail) - 1U);
 
     }
 

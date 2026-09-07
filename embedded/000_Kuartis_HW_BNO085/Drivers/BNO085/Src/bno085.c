@@ -333,6 +333,13 @@ static void BNO085_Reset(void)
 
 	bno_command_seq = 0U;
 
+	bno_mag_data_ready = 0U;
+
+	bno_mag_data.x_uT = 0.0f;
+	bno_mag_data.y_uT = 0.0f;
+	bno_mag_data.z_uT = 0.0f;
+	bno_mag_data.accuracy = 0U;
+
 	bno_init_complete_received = 0U;
 	/* Clear Error List*/
 	for (uint8_t i = 0U; i < BNO_SHTP_ERROR_MAX_COUNT; i++)
@@ -367,17 +374,21 @@ static HAL_StatusTypeDef BNO085_WaitForStartupInt(uint32_t timeout_ms)
 {
     uint32_t start_tick = HAL_GetTick();
 
-    while (bno_int_flag == 0U)
+	while ((bno_int_flag == 0U) && (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,BNO_INT_Pin) == GPIO_PIN_SET))
     {
         if ((HAL_GetTick() - start_tick) >= timeout_ms)
         {
             return HAL_TIMEOUT;
         }
+
+        if (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,BNO_INT_Pin) != GPIO_PIN_RESET)
+        {
+        	return HAL_ERROR;
+        }
     }
 
 
-    if (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,
-                        BNO_INT_Pin) != GPIO_PIN_RESET)
+    if (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,BNO_INT_Pin) != GPIO_PIN_RESET)
     {
         return HAL_ERROR;
     }
