@@ -1,11 +1,15 @@
+// Copyright 2026 Furkan Kara
+
 #include "bno085_driver/bno085_driver.hpp"
-#include "bno085_driver/nmea_parser.hpp"
-#include <cmath>
-#include "tf2/LinearMath/Quaternion.h"
+
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <memory>
+
+#include "bno085_driver/nmea_parser.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "tf2/LinearMath/Quaternion.h"
 
 namespace bno085_driver
 {
@@ -27,8 +31,7 @@ Bno085Driver::CallbackReturn Bno085Driver::on_configure(
 
   serial_port_ = std::make_unique<SerialPort>();
 
-  if (!serial_port_->open("/dev/ttyACM0"))
-  {
+  if (!serial_port_->open("/dev/ttyACM0")) {
     RCLCPP_ERROR(
       get_logger(),
       "Failed to open serial port /dev/ttyACM0");
@@ -37,13 +40,22 @@ Bno085Driver::CallbackReturn Bno085Driver::on_configure(
 
     return CallbackReturn::FAILURE;
   }
-  imu_publisher_ =  create_publisher<sensor_msgs::msg::Imu>("imu/data",rclcpp::SensorDataQoS());
+  imu_publisher_ = create_publisher<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS());
 
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-  diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>( "/diagnostics", 10);
+  rx_buffer_.clear();
+  rx_buffer_.reserve(256U);
 
-  diagnostics_timer_ =  create_wall_timer(std::chrono::seconds(1),std::bind(&Bno085Driver::publishDiagnostics, this));
+  diagnostic_updater_ =
+    std::make_unique<diagnostic_updater::Updater>(this);
+
+  diagnostic_updater_->setHardwareID("BNO085_STM32");
+
+  diagnostic_updater_->add(
+    "BNO085 Driver",
+    this,
+    &Bno085Driver::updateDiagnostics);
 
   RCLCPP_INFO(
     get_logger(),
@@ -61,8 +73,7 @@ Bno085Driver::CallbackReturn Bno085Driver::on_activate(
 
   rx_buffer_.clear();
 
-  if (serial_port_)
-  {
+  if (serial_port_) {
     serial_port_->flushInput();
   }
 
@@ -74,8 +85,8 @@ Bno085Driver::CallbackReturn Bno085Driver::on_activate(
 
   serial_timer_ =
     create_wall_timer(
-      std::chrono::milliseconds(5),
-      std::bind(&Bno085Driver::readSerial, this));
+    std::chrono::milliseconds(5),
+    std::bind(&Bno085Driver::readSerial, this));
 
   return CallbackReturn::SUCCESS;
 }
@@ -88,8 +99,7 @@ Bno085Driver::CallbackReturn Bno085Driver::on_deactivate(
     "Deactivating BNO085 driver");
 
   serial_timer_.reset();
-  if (imu_publisher_)
-  {
+  if (imu_publisher_) {
     imu_publisher_->on_deactivate();
   }
   driver_active_ = false;
@@ -108,11 +118,10 @@ Bno085Driver::CallbackReturn Bno085Driver::on_cleanup(
   tf_broadcaster_.reset();
   imu_publisher_.reset();
   serial_port_.reset();
-  diagnostics_timer_.reset();
-  diagnostics_publisher_.reset();
+  diagnostic_updater_.reset();
   driver_active_ = false;
   data_received_ = false;
-  
+  receive_frequency_hz_ = 0.0;
   return CallbackReturn::SUCCESS;
 }
 
@@ -181,81 +190,62 @@ void Bno085Driver::publishImu(double heading_deg)
   transform.transform.rotation.z = quaternion.z();
   transform.transform.rotation.w = quaternion.w();
 
-tf_broadcaster_->sendTransform(transform);
+  tf_broadcaster_->sendTransform(transform);
 }
 
-void Bno085Driver::publishDiagnostics()
+void Bno085Driver::updateDiagnostics(
+  diagnostic_updater::DiagnosticStatusWrapper & status)
 {
-  diagnostic_msgs::msg::DiagnosticArray message;
-  diagnostic_msgs::msg::DiagnosticStatus status;
-
-  message.header.stamp = now();
-
-  status.name = "BNO085 Driver";
-  status.hardware_id = "BNO085_STM32";
-
   const bool serial_open =
     serial_port_ && serial_port_->isOpen();
 
   bool data_recent = false;
 
-  if (driver_active_ && data_received_)
-  {
+  if (driver_active_ && data_received_) {
     data_recent =
       (now() - last_data_time_).seconds() < 0.5;
   }
 
-  if (!serial_open)
-  {
-    status.level =
-      diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-
-    status.message = "Serial port closed";
-  }
-  else if (!driver_active_)
-  {
-    status.level =
-      diagnostic_msgs::msg::DiagnosticStatus::OK;
-
-    status.message = "Driver inactive";
-  }
-  else if (!data_recent)
-  {
-    status.level =
-      diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-
-    status.message = "No recent sensor data";
-  }
-  else
-  {
-    status.level =
-      diagnostic_msgs::msg::DiagnosticStatus::OK;
-
-    status.message = "BNO085 connected";
+  if (!serial_open) {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+      "Serial port closed");
+  } else if (!driver_active_) {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::OK,
+      "Driver inactive");
+  } else if (!data_recent) {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+      "No recent sensor data");
+  } else {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::OK,
+      "BNO085 connected");
   }
 
-  diagnostic_msgs::msg::KeyValue connection_value;
-  connection_value.key = "Connection";
-  connection_value.value =
-    data_recent ? "Connected" : "Not receiving";
+  if (!serial_open) {
+    status.add("Connection", "Disconnected");
+  } else if (!driver_active_) {
+    status.add("Connection", "Inactive");
+  } else if (data_recent) {
+    status.add("Connection", "Connected");
+  } else {
+    status.add("Connection", "Not receiving");
+  }
 
-  diagnostic_msgs::msg::KeyValue frequency_value;
-  frequency_value.key = "Frequency (Hz)";
-  frequency_value.value =
-    std::to_string(receive_frequency_hz_);
+  const double diagnostic_frequency_hz =
+    data_recent ? receive_frequency_hz_ : 0.0;
 
-  status.values.push_back(connection_value);
-  status.values.push_back(frequency_value);
-
-  message.status.push_back(status);
-
-  diagnostics_publisher_->publish(message);
+  status.add(
+    "Frequency (Hz)",
+    diagnostic_frequency_hz);
 }
 
 void Bno085Driver::readSerial()
 {
   if ((!serial_port_) ||
-      (!serial_port_->isOpen()))
+    (!serial_port_->isOpen()))
   {
     return;
   }
@@ -264,11 +254,10 @@ void Bno085Driver::readSerial()
 
   const int bytes_read =
     serial_port_->read(
-      buffer,
-      sizeof(buffer));
+    buffer,
+    sizeof(buffer));
 
-  if (bytes_read < 0)
-  {
+  if (bytes_read < 0) {
     RCLCPP_ERROR(
       get_logger(),
       "Serial read error");
@@ -276,8 +265,7 @@ void Bno085Driver::readSerial()
     return;
   }
 
-  if (bytes_read == 0)
-  {
+  if (bytes_read == 0) {
     return;
   }
 
@@ -292,45 +280,39 @@ void Bno085Driver::processReceivedData()
   std::size_t newline_position;
 
   while ((newline_position = rx_buffer_.find('\n')) !=
-         std::string::npos)
+    std::string::npos)
   {
     std::string sentence =
       rx_buffer_.substr(
-        0U,
-        newline_position);
+      0U,
+      newline_position);
 
     rx_buffer_.erase(
       0U,
       newline_position + 1U);
 
     if ((!sentence.empty()) &&
-        (sentence.back() == '\r'))
+      (sentence.back() == '\r'))
     {
       sentence.pop_back();
     }
 
-    if (!sentence.empty())
-    {
+    if (!sentence.empty()) {
       double heading_deg;
-      if (parseHdm(sentence, heading_deg))
-      {
+      if (parseHdm(sentence, heading_deg)) {
         const rclcpp::Time current_time = now();
-        if (data_received_)
-        {
+        if (data_received_) {
           const double dt = (current_time - last_data_time_).seconds();
 
-           if (dt > 0.0)
-           {
+          if (dt > 0.0) {
             receive_frequency_hz_ = 1.0 / dt;
-           }
+          }
         }
         last_data_time_ = current_time;
         data_received_ = true;
         publishImu(heading_deg);
-      }
-      else
-      {
-         RCLCPP_WARN(get_logger(),"Invalid NMEA sentence: %s", sentence.c_str());
+      } else {
+        RCLCPP_WARN(get_logger(), "Invalid NMEA sentence: %s", sentence.c_str());
       }
     }
   }

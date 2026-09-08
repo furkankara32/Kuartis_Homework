@@ -1,10 +1,12 @@
+// Copyright 2026 Furkan Kara
+
 #include "bno085_driver/serial_port.hpp"
 
-#include <cerrno>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 
+#include <cerrno>
 namespace bno085_driver
 {
 
@@ -15,25 +17,22 @@ SerialPort::~SerialPort()
 
 bool SerialPort::open(const std::string & device)
 {
-  if (isOpen())
-  {
+  if (isOpen()) {
     return true;
   }
 
   file_descriptor_ =
     ::open(
-      device.c_str(),
-      O_RDWR | O_NOCTTY | O_NONBLOCK);
+    device.c_str(),
+    O_RDWR | O_NOCTTY | O_NONBLOCK);
 
-  if (file_descriptor_ < 0)
-  {
+  if (file_descriptor_ < 0) {
     return false;
   }
 
   termios tty{};
 
-  if (tcgetattr(file_descriptor_, &tty) != 0)
-  {
+  if (tcgetattr(file_descriptor_, &tty) != 0) {
     close();
     return false;
   }
@@ -68,8 +67,7 @@ bool SerialPort::open(const std::string & device)
   tty.c_cc[VMIN] = 0;
   tty.c_cc[VTIME] = 0;
 
-  if (tcsetattr(file_descriptor_, TCSANOW, &tty) != 0)
-  {
+  if (tcsetattr(file_descriptor_, TCSANOW, &tty) != 0) {
     close();
     return false;
   }
@@ -81,16 +79,14 @@ bool SerialPort::open(const std::string & device)
 
 void SerialPort::close()
 {
-  if (file_descriptor_ >= 0)
-  {
+  if (file_descriptor_ >= 0) {
     ::close(file_descriptor_);
     file_descriptor_ = -1;
   }
 }
 void SerialPort::flushInput()
 {
-  if (isOpen())
-  {
+  if (isOpen()) {
     tcflush(file_descriptor_, TCIFLUSH);
   }
 }
@@ -104,32 +100,30 @@ int SerialPort::read(
   std::size_t buffer_size)
 {
   if ((!isOpen()) ||
-      (buffer == nullptr) ||
-      (buffer_size == 0U))
+    (buffer == nullptr) ||
+    (buffer_size == 0U))
   {
     return -1;
   }
 
   const ssize_t bytes_read =
     ::read(
-      file_descriptor_,
-      buffer,
-      buffer_size);
+    file_descriptor_,
+    buffer,
+    buffer_size);
 
-  if (bytes_read > 0)
-  {
+  if (bytes_read > 0) {
     return static_cast<int>(bytes_read);
   }
 
   if ((bytes_read < 0) &&
-      ((errno == EAGAIN) ||
-       (errno == EWOULDBLOCK)))
+    ((errno == EAGAIN) ||
+    (errno == EWOULDBLOCK)))
   {
     return 0;
   }
 
-  if (bytes_read == 0)
-  {
+  if (bytes_read == 0) {
     return 0;
   }
 

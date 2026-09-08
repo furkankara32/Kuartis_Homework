@@ -3,7 +3,10 @@
 <package format="3">
   <name>bno085_driver</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>
+  ROS2 lifecycle driver for receiving BNO085 magnetic heading
+  from an STM32 over an NMEA 0183 serial interface.
+</description>
   <maintainer email="hypemassive32@gmail.com">furkan</maintainer>
   <license>MIT</license>
 
