@@ -121,7 +121,7 @@ typedef struct
 #define BNO_MAG_CAL_INTERVAL_US    20000U // 50 Hz for calibration
 #define BNO_MAG_RUN_INTERVAL_US   100000U // 10 HZ for mag run
 
-#define MAG_KALMAN_Q_UT2_PER_S    1.0f
+#define MAG_KALMAN_Q_UT2_PER_S    0.25f
 
 #define MAG_KALMAN_X_R_UT2        0.433f
 #define MAG_KALMAN_Y_R_UT2        0.393f
