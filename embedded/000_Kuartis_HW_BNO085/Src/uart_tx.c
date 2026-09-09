@@ -24,10 +24,12 @@ static volatile uint16_t uart_tx_active_length = 0U;
 static volatile uint8_t uart_tx_active = 0U;
 
 
-/**
- * @brief Returns the number of free bytes in the TX ring buffer.
- */
 
+/**
+  * @brief Returns the number of free bytes in the TX ring buffer.
+  * @param  void
+  * @retval NUmber of free space in the Tx ring buffer
+  */
 static uint16_t UART_TX_GetFreeSpace(void)
 {
     uint16_t head;
@@ -45,9 +47,12 @@ static uint16_t UART_TX_GetFreeSpace(void)
     return (uint16_t)(tail - head - 1U);
 }
 
+
 /**
- * @brief Starts transmission of the next contiguous buffer block.
- */
+  * @brief Starts transmission of the next contiguous buffer block.
+  * @param  void
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef UART_TX_StartNext(void)
 {
     HAL_StatusTypeDef status;
@@ -69,29 +74,21 @@ static HAL_StatusTypeDef UART_TX_StartNext(void)
     }
 
     /*
-     * Send only the contiguous section between tail
-     * and either head or the end of the ring buffer.
+     * Send only the contiguous section between tail and either head or the end of the ring buffer.
      */
     if (uart_tx_head > uart_tx_tail)
     {
-        chunk_length =
-            uart_tx_head -
-            uart_tx_tail;
+        chunk_length = uart_tx_head - uart_tx_tail;
     }
     else
     {
-        chunk_length =
-            UART_TX_BUFFER_SIZE -
-            uart_tx_tail;
+        chunk_length =  UART_TX_BUFFER_SIZE -  uart_tx_tail;
     }
 
     uart_tx_active = 1U;
     uart_tx_active_length = chunk_length;
 
-    status =
-        HAL_UART_Transmit_IT(uart_tx_handle,
-                             &uart_tx_buffer[uart_tx_tail],
-                             chunk_length);
+    status = HAL_UART_Transmit_IT(uart_tx_handle, &uart_tx_buffer[uart_tx_tail], chunk_length);
 
     if (status != HAL_OK)
     {
@@ -102,6 +99,11 @@ static HAL_StatusTypeDef UART_TX_StartNext(void)
     return status;
 }
 
+/**
+  * @brief UART Transmisson Initialization function
+  * @param  UART_HandleTypeDef
+  * @retval HAL_StatusTypeDef
+  */
 HAL_StatusTypeDef UART_TX_Init(UART_HandleTypeDef *huart)
 {
     if (huart == NULL)
@@ -120,18 +122,20 @@ HAL_StatusTypeDef UART_TX_Init(UART_HandleTypeDef *huart)
     return HAL_OK;
 }
 
-
-HAL_StatusTypeDef UART_TX_Write(const uint8_t *data,
-                                uint16_t length)
+/**
+  * @brief UART write ring buffer function
+  * @param const uint8_t *data = Data byte
+  * @param uint16_t length = Data length
+  * @retval HAL_StatusTypeDef
+  */
+HAL_StatusTypeDef UART_TX_Write(const uint8_t *data, uint16_t length)
 {
     uint16_t i;
     uint16_t free_space;
     uint32_t primask;
     HAL_StatusTypeDef status;
 
-    if ((data == NULL) ||
-        (length == 0U) ||
-        (uart_tx_handle == NULL))
+    if ((data == NULL) || (length == 0U) || (uart_tx_handle == NULL))
     {
         return HAL_ERROR;
     }
@@ -143,21 +147,13 @@ HAL_StatusTypeDef UART_TX_Write(const uint8_t *data,
 
     /*
      * Protect shared head/tail state from UART ISR.
-     *
-     * The critical section is short:
-     * normally only ~20 bytes are copied for one HDM sentence.
-     */
-    primask = __get_PRIMASK();
-    __disable_irq();
+	*/
+    primask = __get_PRIMASK(); // Read current Interrupt status
+    __disable_irq(); // Disable IRQ before get freespace
 
-    free_space =
-        UART_TX_GetFreeSpace();
+    free_space = UART_TX_GetFreeSpace();
 
-    /*
-     * All-or-nothing write.
-     *
-     * We never place half an NMEA sentence into the buffer.
-     */
+
     if (length > free_space)
     {
         if (primask == 0U)
@@ -170,8 +166,8 @@ HAL_StatusTypeDef UART_TX_Write(const uint8_t *data,
 
     for (i = 0U; i < length; i++)
     {
-        uart_tx_buffer[uart_tx_head] =
-            data[i];
+        uart_tx_buffer[uart_tx_head] =  data[i];
+
 
         uart_tx_head++;
 
@@ -182,11 +178,10 @@ HAL_StatusTypeDef UART_TX_Write(const uint8_t *data,
     }
 
     /*
-     * If UART is idle, start transmission immediately.
-     * Otherwise the active transfer callback will continue it.
+     * If UART is idle, start transmission.
      */
-    status =
-        UART_TX_StartNext();
+    status = UART_TX_StartNext();
+
 
     if (primask == 0U)
     {
@@ -196,31 +191,29 @@ HAL_StatusTypeDef UART_TX_Write(const uint8_t *data,
     return status;
 }
 
-
+/**
+  * @brief UART Transmission complete CallBack function
+  * UART_HandleTypeDef *huart
+  * @retval void
+  */
 void UART_TX_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-    if ((huart != uart_tx_handle) ||
-        (uart_tx_active == 0U))
+    if ((huart != uart_tx_handle) ||  (uart_tx_active == 0U))
     {
         return;
     }
 
-    uart_tx_tail =
-        (uint16_t)(uart_tx_tail +
-                   uart_tx_active_length);
+    uart_tx_tail = (uint16_t)(uart_tx_tail + uart_tx_active_length);
 
     if (uart_tx_tail >= UART_TX_BUFFER_SIZE)
     {
-        uart_tx_tail -=
-            UART_TX_BUFFER_SIZE;
+        uart_tx_tail -=  UART_TX_BUFFER_SIZE;
+
     }
 
     uart_tx_active_length = 0U;
     uart_tx_active = 0U;
 
-    /*
-     * Continue automatically with any data
-     * remaining in the ring buffer.
-     */
+
     (void)UART_TX_StartNext();
 }

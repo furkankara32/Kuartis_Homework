@@ -6,51 +6,47 @@
  */
 
 #include "bno085.h"
-
 #include "spi.h"
 
-#define BNO_RX_BUFFER_SIZE     				300U
+
+
+#define BNO_RX_BUFFER_SIZE     					300U
 #define BNO_TX_BUFFER_SIZE      				64U
-#define BNO_CHANNEL_COUNT        			6U
+#define BNO_CHANNEL_COUNT        				6U
 
-#define BNO_CHANNEL_SHTP_COMMAND             0U // SHTP Channel
-#define BNO_CHANNEL_CONTROL                  2U // Sensor Hub Control Channel
-#define BNO_CHANNEL_INPUT_REPORTS            3U // Sensor report channel
+#define BNO_CHANNEL_SHTP_COMMAND             	0U // SHTP Channel
+#define BNO_CHANNEL_CONTROL                  	2U // Sensor Hub Control Channel
+#define BNO_CHANNEL_INPUT_REPORTS            	3U // Sensor report channel
 
-#define BNO_SHTP_COMMAND_ERROR_LIST          0x01U // SHTP Error List Request and Response ID
+#define BNO_SHTP_COMMAND_ERROR_LIST          	0x01U // SHTP Error List Request and Response ID
 
 /*Product ID command and response*/
-#define BNO_REPORT_PRODUCT_ID_REQUEST        0xF9U
-#define BNO_REPORT_PRODUCT_ID_RESPONSE       0xF8U
+#define BNO_REPORT_PRODUCT_ID_REQUEST        	0xF9U
+#define BNO_REPORT_PRODUCT_ID_RESPONSE       	0xF8U
 
 /*Magnetometer commands*/
-#define BNO_REPORT_SET_FEATURE_COMMAND        0xFDU // Set feature command
-#define BNO_REPORT_BASE_TIMESTAMP             0xFBU // Base timestampp reference
-#define BNO_REPORT_MAGNETIC_FIELD_CALIBRATED  0x03U
+#define BNO_REPORT_SET_FEATURE_COMMAND        	0xFDU // Set feature command
+#define BNO_REPORT_BASE_TIMESTAMP             	0xFBU // Base timestampp reference
+#define BNO_REPORT_MAGNETIC_FIELD_CALIBRATED  	0x03U
 
 /*Calibration commands*/
-#define BNO_REPORT_COMMAND_REQUEST           0xF2U
-#define BNO_COMMAND_ME_CALIBRATION           0x07U
-#define BNO_COMMAND_INITIALIZE_UNSOLICITED   0x84U
+#define BNO_REPORT_COMMAND_REQUEST           	0xF2U
+#define BNO_COMMAND_ME_CALIBRATION           	0x07U
+#define BNO_COMMAND_INITIALIZE_UNSOLICITED   	0x84U
 
 /* SH-2 command response */
-#define BNO_REPORT_COMMAND_RESPONSE          0xF1U
+#define BNO_REPORT_COMMAND_RESPONSE          	0xF1U
+
+#define BNO_SHTP_ERROR_MAX_COUNT             	16U // SHTP include  16 type error
 
 
-
-#define BNO_SHTP_ERROR_MAX_COUNT             16U // SHTP include  16 type error
 
 static volatile uint8_t bno_int_flag = 0U;
 
 static uint8_t bno_header[4] = {0};
 static uint8_t bno_rx_payload[BNO_RX_BUFFER_SIZE] = {0};
-
 static uint8_t bno_tx_seq[BNO_CHANNEL_COUNT] = {0}; // SHTP Header sequence number.
-
-
 static uint16_t bno_payload_len = 0U;
-
-
 static uint8_t bno_product_id_received = 0U;
 
 /* Related Errors */
@@ -59,15 +55,13 @@ static uint8_t bno_shtp_error_request_sent = 0U; // Channel 2 product ID request
 static uint8_t bno_shtp_error_list_received = 0U; // Channel 0 SHTP layer Eror List response flag.
 static uint8_t bno_shtp_error_count = 0U; // The number of errors in the error list obtained from Channel 0 SHTP error list response
 static uint8_t bno_shtp_errors[BNO_SHTP_ERROR_MAX_COUNT] = {0}; // Channel 0 SHTP error list
-
 static HAL_StatusTypeDef bno_last_status = HAL_OK;
+
 
 /* Magnetometer static variables*/
 static BNO085_MagData_t bno_mag_data = {0};
 static volatile uint8_t bno_mag_data_ready = 0U;
 static uint8_t bno_command_seq = 0U;  // SH-2 Command REquest payload sequence number
-
-
 static uint8_t bno_init_complete_received = 0U;
 
 
@@ -90,6 +84,13 @@ static HAL_StatusTypeDef BNO085_DrainStartupPackets(void);
 static HAL_StatusTypeDef BNO085_RequestSHTPErrorList(void);
 
 
+
+
+/**
+  * @brief  Read packet function
+  * @param  void
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef BNO085_ReadPacket(void)
 {
 	uint8_t dummy_header[4] = {0};
@@ -165,14 +166,20 @@ static HAL_StatusTypeDef BNO085_ReadPacket(void)
 }
 
 
+
 /**
+  * @brief  Send Packet function
+  *
  * 1. WAKE Pin -> LOW = STM32 wants to transmit data
  * 2. INT Pin -> LOW = BNO085 is ready for communication
  * 3. Handshake is done. CS->LOW = STM32 starts communication
  * 4. SHTP HEADER + PAYLOAD send is done CS-> HIGH
  * 5. WAKE Pin -> HIGH transmisson is done.
  * 6. Incremet the related channel's tx sequence.
- */
+ *
+  * @param  void
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef BNO085_SendPacket(uint8_t channel, const uint8_t *payload, uint16_t payload_len)
 {
 	uint8_t tx_packet[BNO_TX_BUFFER_SIZE] = {0};
@@ -238,8 +245,11 @@ static HAL_StatusTypeDef BNO085_SendPacket(uint8_t channel, const uint8_t *paylo
 	return status;
 }
 
-
-/* Check INT is low. If it is low it means SPI ready for transfer */
+/**
+  * @brief  This function checks INT is low. If it is low it means SPI ready for transfer
+  * @param  timeout_ms = Max timeout value
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef BNO085_WaitForIntLow(uint32_t timeout_ms)
 {
 	uint32_t start_tick = HAL_GetTick();
@@ -256,12 +266,11 @@ static HAL_StatusTypeDef BNO085_WaitForIntLow(uint32_t timeout_ms)
 	return HAL_OK;
 }
 
-
-/** After BN085 reset BNO085 send messages and we should drain these packets
-  * Channel 0 → SHTP Advertisement
-  * Channel 1 → Executable reset message
-  * Channel 2 → SH-2 unsolicited initialization message
-  * */
+/**
+  * @brief  This function reads the startup packets(SHTP Advertisement-> Channel 0)
+  * @param  void
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef BNO085_DrainStartupPackets(void)
 {
     HAL_StatusTypeDef status;
@@ -280,8 +289,7 @@ static HAL_StatusTypeDef BNO085_DrainStartupPackets(void)
 
     while ((HAL_GetTick() - start_tick) < 500U)
     {
-        if (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,
-                             BNO_INT_Pin) == GPIO_PIN_RESET)
+        if (HAL_GPIO_ReadPin(BNO_INT_GPIO_Port,BNO_INT_Pin) == GPIO_PIN_RESET)
         {
             bno_int_flag = 0U;
 
@@ -306,12 +314,11 @@ static HAL_StatusTypeDef BNO085_DrainStartupPackets(void)
         }
         else
         {
+
             /*
-             * Initialization is complete and no new packet
-             * has arrived for 50 ms.
+             * Initialization is complete and no new packet * has arrived for 50 ms.
              */
-            if ((bno_init_complete_received != 0U) &&
-                ((HAL_GetTick() - quiet_tick) >= 50U))
+            if ((bno_init_complete_received != 0U) &&  ((HAL_GetTick() - quiet_tick) >= 50U))
             {
                 return HAL_OK;
             }
@@ -321,6 +328,11 @@ static HAL_StatusTypeDef BNO085_DrainStartupPackets(void)
     return HAL_TIMEOUT;
 }
 
+/**
+  * @brief  This function reset the BNO085
+  * @param  void
+  * @retval void
+  */
 static void BNO085_Reset(void)
 {
 	bno_int_flag = 0U;
@@ -369,7 +381,11 @@ static void BNO085_Reset(void)
 
 }
 
-
+/**
+  * @brief  This function waits Int pin low and int flag is 1 in the startup.
+  * @param  timeout_ms = Max timeout value.
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef BNO085_WaitForStartupInt(uint32_t timeout_ms)
 {
     uint32_t start_tick = HAL_GetTick();
@@ -391,29 +407,28 @@ static HAL_StatusTypeDef BNO085_WaitForStartupInt(uint32_t timeout_ms)
 }
 
 
+/**
+  * @brief  This function request the product ID
+  * @param  void
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef BNO085_RequestProductID(void)
 {
 	uint8_t payload[2];
 
-	payload[0] = BNO_REPORT_PRODUCT_ID_REQUEST; //
+	payload[0] = BNO_REPORT_PRODUCT_ID_REQUEST; //Product ID request command
 	payload[1] = 0x00U;
 
 	/* Channel 2 = SH2 Control Channel , Channel 2 0xF9 = Product ID request*/
 	return BNO085_SendPacket(BNO_CHANNEL_CONTROL, payload, sizeof(payload) ) ;
-	/**
-	  * tx_packet[0] = 0x06 -> Length LSB = 4 HEADER + 2 PAYLOAD
-	  * tx_packet[1] = 0x00 -> Length MSB = 0
-	  * tx_packet[2] = 0x02 -> Channel 2
-	  * tx_packet[3] = 0x00 -> Sequence Number = 0 because first TX data.
-	  *
-	 */
+
 }
 
 /**
- * Channel 0 0x01 Request SHTP Error List Function
- * 05 00 00 00 01 -> [Length LSB] [Length MSB] [Channel] [Sequence] [Command]
- *
- */
+  * @brief  This function request SHTP Error List
+  * @param  void
+  * @retval HAL_StatusTypeDef
+  */
 static HAL_StatusTypeDef BNO085_RequestSHTPErrorList(void)
 {
 	uint8_t payload[1];
@@ -423,19 +438,32 @@ static HAL_StatusTypeDef BNO085_RequestSHTPErrorList(void)
 	return BNO085_SendPacket(BNO_CHANNEL_SHTP_COMMAND, payload, sizeof(payload) );
 }
 
-
+/**
+  * @brief  Returns the most recent HAL status recorded by the BNO085 driver.
+  * @param  void
+  * @retval HAL_StatusTypeDef
+  */
 HAL_StatusTypeDef BNO085_GetLastStatus(void)
 {
     return bno_last_status;
 }
 
-
+/**
+  * @brief  Notifies the BNO085 driver that a sensor interrupt has occurred.
+  * @param  void
+  * @retval void
+  */
 void BNO085_NotifyInterrupt(void)
 {
     bno_int_flag = 1U;
 }
 
-
+/**
+  * @brief  Initializes the BNO085 sensor , Resets the sensor, drains startup packets, sends a Product ID request to verify communication with the device.
+  *
+  * @param  void
+  * @retval void
+  */
 HAL_StatusTypeDef BNO085_Init(void)
 {
 	bno_last_status = HAL_OK;
@@ -454,31 +482,54 @@ HAL_StatusTypeDef BNO085_Init(void)
     return bno_last_status;
 }
 
-
+/**
+ * @brief Checks whether a valid BNO085 Product ID response has been received.
+ *
+ * @return 1 if the Product ID response has been received, otherwise 0.
+ */
 uint8_t BNO085_IsProductIDReceived(void)
 {
     return bno_product_id_received;
 }
 
-
+/**
+ * @brief Returns the reset cause reported by the BNO085.
+ *
+ * @return BNO085 reset cause value obtained from the Product ID response.
+ */
 uint8_t BNO085_GetResetCause(void)
 {
     return bno_reset_cause;
 }
 
-
+/**
+ * @brief Checks whether an SHTP error list response has been received.
+ *
+ * @return 1 if the SHTP error list has been received, otherwise 0.
+ */
 uint8_t BNO085_IsSHTPErrorListReceived(void)
 {
     return bno_shtp_error_list_received;
 }
 
-
+/**
+ * @brief Returns the number of SHTP errors currently stored by the driver.
+ *
+ * @return Number of stored SHTP error entries.
+ */
 uint8_t BNO085_GetSHTPErrorCount(void)
 {
     return bno_shtp_error_count;
 }
 
-
+/**
+ * @brief Returns an SHTP error entry at the specified index.
+ *
+ * @param index Index of the requested SHTP error entry.
+ *
+ * @return SHTP error value at the requested index, or 0xFF if the index
+ *         is outside the valid range.
+ */
 uint8_t BNO085_GetSHTPError(uint8_t index)
 {
     if (index >= bno_shtp_error_count)
@@ -489,7 +540,10 @@ uint8_t BNO085_GetSHTPError(uint8_t index)
     return bno_shtp_errors[index];
 }
 
-
+/**
+ * @brief Processes pending BNO085 packets when sensor data is available.
+ *
+ */
 void BNO085_Process(void)
 {
 
@@ -607,6 +661,12 @@ HAL_StatusTypeDef BNO085_EnableMagnetometer(uint32_t interval_us)
 
     return BNO085_SendPacket(BNO_CHANNEL_CONTROL, payload, sizeof(payload));
 }
+
+/**
+  * @brief  This function starts the magnetometer calibration
+  * @param  void
+  * @retval HAL status
+  */
 HAL_StatusTypeDef BNO085_EnableMagCalibration(void)
 {
 	uint8_t payload[12] = {0};
